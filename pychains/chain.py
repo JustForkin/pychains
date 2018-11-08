@@ -25,6 +25,73 @@ def o(d='', var=None, i=1):
 import pudb
 brk = pudb.set_trace
 
+class Reward:
+    MidWay = -1
+    StackDrop = 1
+    EndPoint = 500
+    Timedout = -500
+
+
+# our particular state representation.
+class Q:
+    def __init__(self):
+        self.chars, self._q = All_Characters, {}
+
+    def __getitem__(self, val):
+        key = self.to_key(val)
+        if key not in self._q: self._q[key] = 0
+        return self._q[key]
+
+    def __setitem__(self, val, value):
+        self._q[self.to_key(val)] = value
+
+    def to_key(self, val):
+        return str(val)
+
+    def explore(self):
+        return random.choice(self.chars)
+
+    def max_a(self):
+        # best next char for this state.
+        c = self.chars[0]
+        maxq = self[c]
+        for char in self.chars:
+           q = self[char]
+           if q > maxq:
+               maxq, c = q, char
+        return c
+
+
+Alpha = 0.1 # Learning rate
+Beta = 1    # Discounting factor
+
+class QPolicy:
+    def __init__(self):
+        self._q, self._time_step = Q(), 0
+
+    def q(self):
+        return self._q
+
+    def next_char(self, req):
+        s = random.randint(0, self._time_step)
+        self._time_step += 1
+        if s == 0:
+            return self._q.explore()
+        else:
+            return self._q.max_a()
+
+    def max_a_val(self):
+        a_char = self._q.max_a()
+        return self._q[a_char]
+
+    def update(self, a_char, last_max_q, reward):
+        # Q(a,s)  = (1-alpha)*Q(a,s) + alpha(R(s) + beta*max_a(Q(a_,s_)))
+        q_now = self._q[a_char]
+        q_new = (1 - Alpha) * q_now + Alpha*(reward + Beta*last_max_q)
+        self._q[a_char] = q_new
+
+
+
 # TODO: Any kind of preprocessing -- space strip etc. distorts the processing.
 
 def create_arg(s):
@@ -235,6 +302,8 @@ class Chain:
         self.initiate_bfs = False
         self._my_args = []
         self.seen = set()
+        self._policy = QPolicy()
+        self._reward = Reward()
 
     def add_sys_args(self, var):
         if type(var) is not tainted.tstr:
