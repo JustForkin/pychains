@@ -25,6 +25,35 @@ def o(d='', var=None, i=1):
 import pudb
 brk = pudb.set_trace
 
+class QState:
+    def __init__(self, key):
+        self.key = key
+        self._policy = QPolicy()
+
+    @staticmethod
+    def get_key(chars):
+        my_chars = []
+        for c in chars:
+            if c in string.ascii_letters:
+                if my_chars and my_chars[-1] == 'a':
+                    continue
+                else:
+                    my_chars.append('a')
+            elif c in string.digits:
+                if my_chars and my_chars[-1] == '1':
+                    continue
+                else:
+                    my_chars.append('1')
+            elif c in string.whitespace:
+                if my_chars and my_chars[-1] == ' ':
+                    continue
+                else:
+                    my_chars.append(' ')
+            else:
+                my_chars.append(c)
+        return ''.join(my_chars)
+
+
 class Reward:
     MidWay = -1
     StackDrop = 1
@@ -48,9 +77,6 @@ class Q:
     def to_key(self, val):
         return str(val)
 
-    def explore(self):
-        return random.choice(self.chars)
-
     def max_a(self):
         # best next char for this state.
         c = self.chars[0]
@@ -72,11 +98,11 @@ class QPolicy:
     def q(self):
         return self._q
 
-    def next_char(self, req):
+    def next_char(self):
         s = random.randint(0, self._time_step)
         self._time_step += 1
         if s == 0:
-            return self._q.explore()
+            return None
         else:
             return self._q.max_a()
 
@@ -255,10 +281,12 @@ class DeepSearch(Search):
     def solve(self, traces, i, seen):
         arg_prefix = self.my_arg
         sprefix = str(arg_prefix)
+        append = False
         # add the prefix to seen.
         # we are assuming a character by character comparison.
         # so get the comparison with the last element.
         while traces:
+            append = False
             h, *ltrace = traces
             k = self.parsing_state(h, arg_prefix)
             log((config.RandomSeed, i, k, "is tainted", isinstance(h.op_A, tainted.tstr)), 1)
@@ -284,6 +312,7 @@ class DeepSearch(Search):
                 #assert len(fixes) == 0
                 # An empty comparison at the EOF
                 chars = All_Characters
+                append = True
             else:
                 assert k == EState.Unknown
                 # Unknown what exactly happened. Strip the last and try again
@@ -291,10 +320,10 @@ class DeepSearch(Search):
                 traces = ltrace
                 continue
 
-            return [self.create_prefix("%s%s" % (new_prefix, new_char))
+            return append, [self.create_prefix("%s%s" % (new_prefix, new_char))
                     for new_char in chars]
 
-        return []
+        return append, []
 
 class Chain:
 
@@ -302,8 +331,7 @@ class Chain:
         self.initiate_bfs = False
         self._my_args = []
         self.seen = set()
-        self._policy = QPolicy()
-        self._reward = Reward()
+        self.states = {}
 
     def add_sys_args(self, var):
         if type(var) is not tainted.tstr:
@@ -341,14 +369,26 @@ class Chain:
         # replace interesting things
         arg = config.MyPrefix if config.MyPrefix else random.choice(All_Characters)
         solution_stack = [DeepSearch(arg)]
+        skey = QState.get_key(arg)
+        self.states[skey] = QState(skey)
+        last_state = None
 
         for i in range(self.start_i, config.MaxIter):
             my_prefix, *solution_stack = solution_stack
             self.apply_prefix(my_prefix)
+            skey = QState.get_key(self.sys_args())
+            if skey not in self.states:
+                self.states[skey] = QState(skey)
+            last_state = state
+            state = self.states[skey]
+            char = self.sys_args()[-1]
+            last_state.next_state[char] = state
+            state.prev_state[char] = last_state
+
             self.start_i = i
             tainted.Comparisons = []
             try:
-                log(">> %s" % self.sys_args(), 1)
+                log(">> %s -- %s" % (self.sys_args(), state.key), 1)
                 v = fn(self.sys_args())
                 self.log_comparisons()
                 solution_stack = my_prefix.continue_valid()
@@ -360,18 +400,24 @@ class Chain:
                 self.traces = list(reversed(tainted.Comparisons))
                 sim_len = self.current_prefix.get_comparison_len(self.traces)
                 self.current_prefix.sim_length = sim_len
-                new_solutions = self.current_prefix.solve(self.traces, i, self.seen)
-                if self.initiate_bfs:
-                    solution_stack = solution_stack + self.prune(new_solutions)
+                c = state._policy.next_char()
+                if c:
+                    new_solutions = [self.sys_args() + c]
                 else:
-                    my_len = float('Inf')
-                    choice = self.prune(new_solutions)
-                    for i in choice + solution_stack:
-                        sim_len = i.sim_length if hasattr(i, 'sim_length') else float('Inf')
-                        if sim_len < my_len:
-                            my_len = sim_len
-                            choice = [i]
-                    solution_stack = choice
+                    append, new_solutions = self.current_prefix.solve(self.traces, i, self.seen)
+                    if append:
+                        # reward for current state.
+                        last_max_q = 0 # TODO
+                        reward = 0 # TODO
+                        state.policy.update(self.sys_args()[-1], last_max_q, reward)
+                my_len = float('Inf')
+                choice = self.prune(new_solutions)
+                for i in choice + solution_stack:
+                    sim_len = i.sim_length if hasattr(i, 'sim_length') else float('Inf')
+                    if sim_len < my_len:
+                        my_len = sim_len
+                        choice = [i]
+                solution_stack = choice
 
                 if not solution_stack:
                     if not self.initiate_bfs:
