@@ -287,7 +287,7 @@ class Chain:
                     return (self.sys_args(), v)
             except Exception as e:
                 self.seen.add(str(self.current_prefix.my_arg))
-                log('Exception %s' % e)
+                log('Program Exception %s' % e)
                 self.traces = list(reversed(tainted.Comparisons))
                 sim_len = self.current_prefix.get_comparison_len(self.traces)
                 self.current_prefix.sim_length = sim_len
