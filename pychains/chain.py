@@ -229,132 +229,6 @@ class DeepSearch(Search):
 
         return []
 
-class PythonSpecificDeepSearch(DeepSearch):
-
-    def create_prefix(self, myarg): return PythonSpecificDeepSearch(myarg)
-
-    def best_matching_str(self, elt, lst):
-        largest, lelt = '', None
-        for e in lst:
-            common = os.path.commonprefix([elt, e])
-            if len(common) > len(largest):
-                largest, lelt = common, e
-        return largest, lelt
-
-    def parsing_state(self, h, arg_prefix):
-        last_char_added = arg_prefix[-1]
-        o = h.op
-
-        if o in [Op.EQ, Op.NE] and isinstance(h.op_B, str) and len(h.op_B) > 1 and h.op_A.x() == last_char_added.x():
-            # Dont add IN and NOT_IN -- '0' in '0123456789' is a common
-            # technique in char comparision to check for digits
-            # A string comparison rather than a character comparison.
-            return (1, EState.String, h)
-
-        elif o in CmpSet and isinstance(h.op_B, list) and max([len(opB) in h.op_B]) > 1 and h.op_A.x() == last_char_added.x():
-            # A string comparison rather than a character comparison.
-            return (1, EState.String, h)
-
-        elif h.op_A.x() == last_char_added.x():
-            # A character comparison of the *last* char.
-            return (1, EState.Char, h)
-
-        elif h.op_A.x() == len(arg_prefix):
-            # An empty comparison at the EOF
-            return (1, EState.EOF, h)
-
-        elif len(h.op_A) == 1 and h.op_A.x() != last_char_added.x():
-            # An early validation, where the comparison goes back to
-            # one of the early chars. Imagine when we use regex /[.0-9+-]/
-            # for int, and finally validate it with int(mystr)
-            return (1, EState.Trim, h)
-
-        else:
-            return (-1, EState.Unknown, (h, last_char_added))
-
-
-    def solve(self, traces, i, seen):
-        arg_prefix = self.my_arg
-        # add the prefix to seen.
-        sprefix = str(arg_prefix)
-        # we are assuming a character by character comparison.
-        # so get the comparison with the last element.
-        last_char_added = arg_prefix[-1]
-
-
-        while traces:
-            h, *ltrace = traces
-            o = h.op
-
-            idx, k, info = self.parsing_state(h, arg_prefix)
-            log((config.RandomSeed, i, idx, k, info, "is tainted", isinstance(h.op_A, tainted.tstr)), 1)
-
-            if k == EState.Char:
-                # A character comparison of the *last* char.
-                # This was a character comparison. So collect all
-                # comparisons made using this character. until the
-                # first comparison that was made otherwise.
-                # Now, try to fix the last failure
-                fixes = self.get_previous_fixes(h, sprefix, seen)
-                cmp_stack = self.comparisons_on_given_char(h, traces)
-                if str(h.op_A) == last_char_added and o in CmpSet:
-                    # Now, try to fix the last failure
-                    corr = self.get_corrections(cmp_stack, lambda i: i not in fixes)
-                    if not corr: raise Exception('Exhausted attempts: %s' % fixes)
-                else:
-                    corr = self.get_corrections(cmp_stack, lambda i: True)
-                    fixes = []
-
-                # check for line cov here.
-                prefix = sprefix[:-1]
-                sols = []
-                chars = [new_char for v in corr for new_char in v]
-                chars = chars if config.WeightedGeneration else sorted(set(chars))
-                for new_char in chars:
-                    arg = "%s%s" % (prefix, new_char)
-                    sols.append(self.create_prefix(arg))
-
-                return sols
-            elif k == EState.Trim:
-                # we need to (1) find where h.op_A._idx is within
-                # sys_args, and trim sys_args to that location, and
-                # add a new character.
-                fix =  [sprefix[h.op_A.x()]]
-                args = sprefix[:h.op_A.x()] + random.choice([i for i in All_Characters if i != fix[0]])
-                # we already know the result for next character
-                sols = [self.create_prefix(args)]
-                return sols # VERIFY - TODO
-
-            elif k == EState.String:
-                if o in [Op.IN, Op.NOT_IN]:
-                    opB = self.best_matching_str(str(h.op_A), [str(i) for i in h.op_B])
-                elif o in [Op.EQ, Op.NE]:
-                    opB = str(h.op_B)
-                else:
-                    assert False
-                common = os.path.commonprefix([str(h.op_A), opB])
-                assert str(h.op_B)[len(common)-1] == last_char_added
-                arg = "%s%s" % (sprefix, str(h.op_B)[len(common):])
-                sols = [self.create_prefix(arg)]
-                return sols
-            elif k == EState.EOF:
-                # An empty comparison at the EOF
-                sols = []
-                for new_char in All_Characters:
-                    arg = "%s%s" % (sprefix, new_char)
-                    sols.append(self.create_prefix(arg))
-
-                return sols
-            elif k == EState.Unknown:
-                # Unknown what exactly happened. Strip the last and try again
-                # try again.
-                traces = ltrace
-                continue
-            else:
-                assert False
-
-        return []
-
 class Chain:
 
     def __init__(self):
@@ -392,14 +266,12 @@ class Chain:
         else:
             return [random.choice(solutions)]
 
+    # entry
     def exec_argument(self, fn):
         self.start_i = 0
         # replace interesting things
         arg = config.MyPrefix if config.MyPrefix else random.choice(All_Characters)
-        if config.Python_Specific:
-            solution_stack = [PythonSpecificDeepSearch(arg)]
-        else:
-            solution_stack = [DeepSearch(arg)]
+        solution_stack = [DeepSearch(arg)]
 
         for i in range(self.start_i, config.MaxIter):
             my_prefix, *solution_stack = solution_stack
