@@ -355,66 +355,6 @@ class PythonSpecificDeepSearch(DeepSearch):
 
         return []
 
-class WideSearch(Search):
-
-    def create_prefix(self, myarg): return WideSearch(myarg)
-
-    def comparison_chain_equal(self, traces):
-        arg = self.my_arg
-        cmp_stack1 = self.comparisons_at(arg[-1].x(), traces)
-        for i_eq in range(config.Comparison_Equality_Chain):
-            cmp_stackx = self.comparisons_at(arg[-(i_eq+2)].x(), traces)
-
-            if len(cmp_stack1) != len(cmp_stackx): return False
-            for i,(_,t1) in enumerate(cmp_stack1):
-                _,tx = cmp_stackx[i]
-                if str(t1.op) != str(tx.op):
-                    return False
-                if not self.predicate_compare(t1, tx):
-                    return False
-        return True
-
-
-
-    def solve(self, traces, i, seen):
-        # Fast predictive solutions. Use only known characters to fill in when
-        # possible.
-
-        arg_prefix = self.my_arg
-        sols = []
-        while traces:
-            h, *ltrace = traces
-            k = self.parsing_state(h, arg_prefix)
-            log((config.RandomSeed, i, k, "is tainted",
-                isinstance(h.op_A, tainted.tstr)), 1)
-            sprefix = str(arg_prefix)
-            fixes = self.get_previous_fixes(h, sprefix, seen)
-
-            cmp_stack = self.comparisons_on_given_char(h, traces)
-            opBs = [[t.opB] if t.op in [Op.EQ, Op.NE] else t.opB
-                    for i, t in cmp_stack]
-            corr = [i for i in sum(opBs, []) if i and i not in fixes]
-
-            if k == EState.Trim:
-                if not corr:
-                    return sols
-            elif k == EState.Append:
-                if not corr:
-                    # last resort. Use random fill in
-                    sols.append(self.create_prefix("%s%s" %
-                        (sprefix,random.choice(All_Characters))))
-                    traces = [i for i in traces if len(i.opA) == 1]
-                    continue
-
-            chars = corr if config.WeightedGeneration else sorted(set(corr))
-            end =  h.op_A.x()
-            new_prefix = sprefix[:end]
-            for new_char in chars:
-                sols.append(self.create_prefix("%s%s" % (new_prefix, new_char)))
-            return sols
-
-        return []
-
 class Chain:
 
     def __init__(self):
@@ -479,18 +419,6 @@ class Chain:
                 self.traces = list(reversed(tainted.Comparisons))
                 sim_len = self.current_prefix.get_comparison_len(self.traces)
                 self.current_prefix.sim_length = sim_len
-                if not self.initiate_bfs and sim_len > config.Wide_Trigger:
-                    print('Wide: %s' % repr(self.current_prefix.my_arg), flush=True, file=sys.stderr)
-                    self.arg_at_bfs = self.current_prefix.my_arg
-                    self.current_prefix = WideSearch(str(self.current_prefix.my_arg))
-                    self.current_prefix.first = True
-                    self.initiate_bfs = True
-                elif self.initiate_bfs and len(solution_stack) > config.Deep_Trigger:
-                    # choose the most promising - TODO
-                    print('Deep: %s' % repr(self.current_prefix.my_arg), flush=True, file=sys.stderr)
-                    self.current_prefix = DeepSearch(str(self.current_prefix.my_arg))
-                    self.initiate_bfs = False
-
                 new_solutions = self.current_prefix.solve(self.traces, i, self.seen)
                 if self.initiate_bfs:
                     solution_stack = solution_stack + self.prune(new_solutions)
